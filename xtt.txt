@@ -152,3 +152,147 @@ async def run_mcp_langchain_agent():
 
 if __name__ == "__main__":
     asyncio.run(run_mcp_langchain_agent())
+	
+	
+	
+pip install langchain-huggingface langchain-mcp-adapters mcp transformers torch accelerate bitsandbytes
+import asyncio
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from langchain_huggingface import ChatHuggingFace, HuggingFacePipeline
+from langchain_mcp_adapters.tools import load_mcp_tools
+from langgraph.prebuilt import create_react_agent
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+# 1. Setup Local Model Path
+model_path = "./path/to/gpt-oss-20b"
+
+# 2. Load Model with 4-bit Quantization (to fit in GPU memory)
+tokenizer = AutoTokenizer.from_pretrained(model_path)
+model = AutoModelForCausalLM.from_pretrained(
+    model_path,
+    device_map="auto",
+    load_in_4bit=True, # Set to False if you have 48GB+ VRAM
+    torch_dtype=torch.bfloat16,
+    trust_remote_code=True
+)
+
+# Create the HF Pipeline
+hf_pipe = HuggingFacePipeline(
+    pipeline=pipeline(
+        "text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        max_new_tokens=512,
+        temperature=0.1,
+    )
+)
+
+# Wrap for LangChain
+llm = ChatHuggingFace(llm=hf_pipe)
+
+# 3. Configure MCP Tool (Example: Brave Search or Google Search)
+server_params = StdioServerParameters(
+    command="npx",
+    args=["-y", "@modelcontextprotocol/server-brave-search"],
+    env={"BRAVE_SEARCH_API_KEY": "YOUR_API_KEY"} 
+)
+
+async def main():
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            
+            # 4. Load tools from MCP
+            tools = await load_mcp_tools(session)
+            
+            # 5. Create the Agent
+            agent = create_react_agent(llm, tools)
+            
+            # 6. Run Query
+            inputs = {"messages": [("user", "Search for the current weather in Zurich and tell me if I need an umbrella.")]}
+            
+            async for chunk in agent.astream(inputs):
+                for node, values in chunk.items():
+                    print(f"Node: {node}")
+                    print(values["messages"][-1].content)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+
+
+
+
+
+
+Python Program: CPU-Optimized GPT-OSS-20B + MCP + LangChain
+
+pip install langchain-huggingface langchain-mcp-adapters mcp transformers torch accelerate
+
+
+python
+import asyncio
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from langchain_huggingface import ChatHuggingFace, HuggingFacePipeline
+from langchain_mcp_adapters.tools import load_mcp_tools
+from langgraph.prebuilt import create_react_agent
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+# 1. CPU Model Configuration
+model_path = "./path/to/gpt-oss-20b"
+
+print("--- Loading 20B Model to CPU (This will take time and ~42GB RAM) ---")
+tokenizer = AutoTokenizer.from_pretrained(model_path)
+model = AutoModelForCausalLM.from_pretrained(
+    model_path,
+    device_map="cpu",               # Forces everything to System RAM
+    low_cpu_mem_usage=True,         # Reduces RAM spikes during loading
+    torch_dtype="auto",             # Uses the model's native precision
+    trust_remote_code=True
+)
+
+# 2. Build the CPU Pipeline
+# Note: Inference on CPU is slow; max_new_tokens is kept low for responsiveness
+hf_pipe = HuggingFacePipeline(
+    pipeline=pipeline(
+        "text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        max_new_tokens=256,
+        temperature=0.1
+    )
+)
+
+llm = ChatHuggingFace(llm=hf_pipe)
+
+# 3. Setup MCP Server (Using Fetch server to read web content)
+server_params = StdioServerParameters(
+    command="uvx",
+    args=["mcp-server-fetch"]
+)
+
+async def run_cpu_agent():
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            
+            # 4. Fetch tools from MCP and convert for LangChain
+            tools = await load_mcp_tools(session)
+            
+            # 5. Create Agent
+            agent = create_react_agent(llm, tools)
+            
+            # 6. Execute Task
+            print("--- Agent Ready ---")
+            query = {"messages": [("user", "Fetch the content of https://example.com and summarize it.")]}
+            
+            async for chunk in agent.astream(query):
+                for node, values in chunk.items():
+                    print(f"[{node}]: {values['messages'][-1].content}")
+
+if __name__ == "__main__":
+    asyncio.run(run_cpu_agent())
