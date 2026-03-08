@@ -1,5 +1,6 @@
 pip install "qwen-agent[gui,mcp]" transformers torch acceleration
 
+
 import os
 from qwen_agent.agents import Assistant
 
