@@ -101,3 +101,54 @@ async def run_mcp_agent():
 
 if __name__ == "__main__":
     asyncio.run(run_mcp_agent())
+	
+	import asyncio
+from langchain_huggingface import ChatHuggingFace, HuggingFacePipeline
+from langchain_mcp_adapters.tools import load_mcp_tools
+from langgraph.prebuilt import create_react_agent
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+# 1. Load Local Model using HuggingFacePipeline
+model_path = "./path/to/your/Qwen3-1.7B-Instruct"
+
+# Initialize the pipeline for text generation
+hf_pipe = HuggingFacePipeline.from_model_id(
+    model_id=model_path,
+    task="text-generation",
+    pipeline_kwargs={
+        "max_new_tokens": 512,
+        "temperature": 0.7,
+        "do_sample": True,
+    },
+)
+
+# Wrap it in ChatHuggingFace for LangChain compatibility
+llm = ChatHuggingFace(llm=hf_pipe)
+
+# 2. Define MCP Server Parameters (e.g., local filesystem)
+server_params = StdioServerParameters(
+    command="uvx",
+    args=["mcp-server-filesystem", "/path/to/allowed/directory"]
+)
+
+async def run_mcp_langchain_agent():
+    # 3. Use stdio_client to connect to the MCP Server
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            # Initialize the MCP connection
+            await session.initialize()
+            
+            # 4. Load tools from the MCP session into LangChain format
+            tools = await load_mcp_tools(session)
+            
+            # 5. Create a ReAct agent using LangGraph prebuilt
+            agent = create_react_agent(llm, tools)
+            
+            # 6. Execute a request
+            query = {"messages": [("user", "List the files in the directory and tell me what is in 'notes.txt'")]}
+            async for chunk in agent.astream(query):
+                print(chunk)
+
+if __name__ == "__main__":
+    asyncio.run(run_mcp_langchain_agent())
