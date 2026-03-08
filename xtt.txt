@@ -45,3 +45,59 @@ for responses in bot.run(messages=messages):
     pass
 
 print(responses[-1]['content'])
+import asyncio
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+
+# 1. Load Local Qwen3-1.7B
+model_path = "./path/to/your/Qwen3-1.7B-Instruct"
+tokenizer = AutoTokenizer.from_pretrained(model_path)
+model = AutoModelForCausalLM.from_pretrained(
+    model_path,
+    torch_dtype=torch.bfloat16,
+    device_map="auto"
+).eval()
+
+async def run_mcp_agent():
+    # 2. Configure the MCP Server (Example: a simple local math server)
+    server_params = StdioServerParameters(
+        command="python",
+        args=["math_server.py"] # Replace with your actual server script or command
+    )
+
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            # Initialize connection and list tools
+            await session.initialize()
+            available_tools = await session.list_tools()
+            
+            # 3. Create a System Prompt including the tool schemas
+            tool_schemas = [f"Name: {t.name}, Description: {t.description}" for t in available_tools.tools]
+            system_prompt = f"You have access to these tools:\n{tool_schemas}\nRespond in JSON format to call a tool: {{\"tool\": \"name\", \"args\": {{}}}}"
+
+            # 4. Model Inference
+            user_query = "What is 15.5 plus 24.5?"
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_query}
+            ]
+
+            # Apply Qwen3 chat template
+            input_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            inputs = tokenizer(input_text, return_tensors="pt").to(model.device)
+
+            with torch.no_grad():
+                output_ids = model.generate(**inputs, max_new_tokens=256)
+                response = tokenizer.decode(output_ids[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
+
+            print(f"Model Output: {response}")
+
+            # 5. Execute Tool if requested (Basic Parsing)
+            # In a real app, you would parse the JSON and call:
+            # result = await session.call_tool("tool_name", {"arg": "val"})
+            # print(f"Tool Result: {result}")
+
+if __name__ == "__main__":
+    asyncio.run(run_mcp_agent())
